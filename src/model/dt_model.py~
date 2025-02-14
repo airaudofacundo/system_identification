@@ -1,0 +1,15 @@
+from abc import ABC, abstractmethod
+
+class dt_model(ABC):
+
+    @abstractmethod
+    def objective(self):
+        pass
+
+    @abstractmethod
+    def gradient(self):
+        pass
+
+    # @abstractmethod
+    # def print_sample_percentiles(self, p5, p50, p95):
+    #     pass

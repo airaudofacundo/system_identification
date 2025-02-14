@@ -1,0 +1,27 @@
+<ParameterList name="Inputs">
+  <ParameterList name="General">
+    <Parameter name="Output Level" type="int" value="1"/>
+    <ParameterList name="Secant">
+      <Parameter name="Use as Hessian" type="bool" value="false" />
+    </ParameterList>
+  </ParameterList>
+  <ParameterList name="Step">
+    <!-- ===========  STEP TYPE SPECIFICATION  =========== -->
+    <Parameter name="Type" type="string" value="Line Search" />
+    <ParameterList name="Line Search">
+      <Parameter name="Function Evaluation Limit"      type="int"    value="20"    />
+      <Parameter name="Sufficient Decrease Tolerance"  type="double" value="1.e-6" />
+      <Parameter name="Initial Step Size"              type="double" value="1.0"   />
+      <!-- ===========  DESCENT ALGORITHM SPECIFICATION  =========== -->
+      <ParameterList name="Descent Method">
+        <Parameter name="Type"              type="string" value="Steepest Descent" />
+      </ParameterList>
+    </ParameterList>
+  </ParameterList>
+  <ParameterList name="Status Test">
+    <Parameter name="Gradient Tolerance"   type="double" value="1.0e-14"  />
+    <Parameter name="Constraint Tolerance" type="double" value="1.0e-14"  />
+    <Parameter name="Step Tolerance"       type="double" value="1.0e-14" />
+    <Parameter name="Iteration Limit"      type="int"    value="500"     />
+  </ParameterList>
+</ParameterList>
