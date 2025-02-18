@@ -10,6 +10,7 @@ from src.model.ccx.ccx2paraview import generate_vtk
 from scipy import stats
 from scipy.stats import norm, skewnorm
 from scipy.spatial import KDTree
+from itertools import product
 from src.model.ccx.sparsegrid import SparseInterpolator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
@@ -86,9 +87,6 @@ class ccx_model(dt_model):
     # Initial value for var. For use in CVaR case
     var = 1.0e-06
 
-    # Determine whether we are using sparse grids
-    using_sparse_grid = False
-
     # Sparse grid intepolation parameters
     interpolation_nval = 2
     interpolated_obj = []
@@ -114,13 +112,12 @@ class ccx_model(dt_model):
         run_type        = input_vars.get('run_type', 'static')
         obj_type        = input_vars.get('obj_type', 'basic')
         ngauss          = input_vars.get('ngauss', 3)
-        nsample         = input_vars.get('nsample', 0)
+        nsample         = input_vars.get('nsample', 1)
         nrandom         = input_vars.get('nrandom', 0)
         cvar_beta       = input_vars.get('cvar_beta', 0.1)
         risk_lambda     = input_vars.get('risk_lambda', 0.5)
         error_lower     = input_vars.get('error_lower', 0.8)
         error_upper     = input_vars.get('error_upper', 1.2)
-        sparse_grid     = input_vars.get('sparse_grid', False)
         dt              = input_vars.get('dt', 0.0)
         ntime           = input_vars.get('ntime', 1)
         gradient_factor = input_vars.get('gradient_factor', 1.0)
@@ -133,16 +130,14 @@ class ccx_model(dt_model):
         self.dt = dt
         self.ntime = ntime
 
-        self.using_sparse_grid = sparse_grid
-
-        # Only read mesh from first case.. Hope it's the same for all!
-        self.read_inp_file("ccx_input/calculix_forward_case0.inp")
-
         # To Do: Put this into read_input_file
         if ngauss > 0 and nrandom > 0:
             self.set_integration_order(ngauss, nrandom)
             self.set_cvar_beta(cvar_beta)
             self.set_risk_lambda(risk_lambda)
+
+        # Only read mesh from first case.. Hope it's the same for all!
+        self.read_inp_file("ccx_input/calculix_forward_case0.inp")
 
         self.compute_stiffness()
 
@@ -501,14 +496,9 @@ class ccx_model(dt_model):
     """
     def set_nsensor(self, nsensor):
         self.nsensor = nsensor
-        self.sensor_point = [0 for i in range(nsensor)]
-        self.sensor_unkno_targ = [[[[0.0, 0.0, 0.0] for i in range(nsensor)] \
-                                                    for j in range(self.ntime)] \
-                                                    for k in range(self.ncase)]
-        self.sensor_unkno_curr = [[[[[0.0, 0.0, 0.0] for i in range(nsensor)] \
-                                                     for j in range(self.nsample)] \
-                                                     for k in range(self.ntime)] \
-                                                     for l in range(self.ncase)]
+        self.sensor_point = np.zeros(nsensor, dtype=np.int32)
+        self.sensor_unkno_targ = np.zeros((self.ncase, self.ntime, nsensor, 3), dtype=np.float64)
+        self.sensor_unkno_curr = np.zeros((self.ncase, self.nsample, self.ntime, nsensor, 3), dtype=np.float64)
         self.point_tree = KDTree(self.point_coord, leafsize=100)
 
 
@@ -1156,7 +1146,7 @@ class ccx_model(dt_model):
 
          Reads the sensor displacements for given .dat file filename for load case icase.
     """
-    def get_unknown_at_sensors(self, icase, filename):
+    def get_unknown_at_sensors(self, filename):
         unknown = np.zeros((self.ntime, self.nsensor, 3), dtype=np.float64)
         point_id = np.zeros(self.npoin, dtype=np.int64)
         point_displ = np.zeros((self.ntime, self.npoin, 3), dtype=np.float64)
@@ -1208,9 +1198,9 @@ class ccx_model(dt_model):
         ptr = np.zeros(MAX_PTR, dtype=np.int32)
 
         if run_type == 'grad':
-            filename = 'results/calculix_forward_case' + str(icase) + '_isample' + str(isample)
+            filename = 'results/calculix_forward_case' + str(icase) + '_sample' + str(isample)
         elif run_type == 'hessvec':
-            filename = 'results/calculix_forward_hv_case' + str(icase) + '_isample' + str(isample)
+            filename = 'results/calculix_forward_hv_case' + str(icase) + '_sample' + str(isample)
         else:
             raise ValueError("In get_unknowns: wrong run_type")
         with open(filename + '.frd') as fu:
@@ -1337,9 +1327,9 @@ class ccx_model(dt_model):
                         self.element[ielem].forward_hessvec_unkno[3*ipoin:3*(ipoin+1)] = displ[:, ip]
 
         if run_type == 'grad':
-            filename = 'results/calculix_adjoint_case' + str(icase) + '_isample' + str(isample)
+            filename = 'results/calculix_adjoint_case' + str(icase) + '_sample' + str(isample)
         elif run_type == 'hessvec':
-            filename = 'results/calculix_adjoint_hv_case' + str(icase) + '_isample' + str(isample)
+            filename = 'results/calculix_adjoint_hv_case' + str(icase) + '_sample' + str(isample)
         with open(filename + '.frd') as fu:
             for _ in range(10):
                 fu.readline()
@@ -1579,6 +1569,15 @@ class ccx_model(dt_model):
                 sensor_load[itime][isensor][0] += du * self.gradient_factor
                 sensor_load[itime][isensor][1] += dv * self.gradient_factor
                 sensor_load[itime][isensor][2] += dw * self.gradient_factor
+        if self.obj_type == 0:
+            sensor_load *= self.integ.weight[isample] * self.pdf(icase, isample, self.integ.gpoint[isample])
+        elif self.obj_type == 1:
+            sensor_load *= self.integ.weight[isample] * self.pdf(icase, isample, self.integ.gpoint[isample]) \
+                * self.plus_func_dx(self.get_objective(icase, isample) - self.var) / (1.0 - self.cvar_beta)
+        elif self.obj_type == 2:
+            objval = self.get_objective(icase, isample)
+            sensor_load *= self.integ.weight[isample] * self.pdf(icase, isample, self.integ.gpoint[isample]) \
+                * (self.risk_lambda + (1.0-self.risk_lambda) * self.plus_func_dx(objval-self.var) / (1.0-self.cvar_beta))
 
         return sensor_load
 
@@ -1620,11 +1619,12 @@ class ccx_model(dt_model):
          Modifies the elastic properties of the reference input file
          and runs Calculix to obtain the objective for current strength_factor
     """
-    def compute_objective(self, icase):
-        # No more than one sample per case
-        isample = 0
+    def compute_objective(self, icase, isample):
         # Read the reference file
-        ref_file = "ccx_input/calculix_forward_case" + str(icase)
+        if self.nsample <= 1:
+            ref_file = "ccx_input/calculix_forward_case" + str(icase)
+        else:
+            ref_file = "ccx_input/calculix_forward_case" + str(icase) + "_sample" + str(isample)
         with open(ref_file + '.inp', 'r') as file:
             lines = file.readlines()
 
@@ -1648,7 +1648,7 @@ class ccx_model(dt_model):
                 material_count += 1
 
         # Writing the modified file to a new file
-        new_file = 'results/calculix_forward_case' + str(icase) + '_isample' + str(isample)
+        new_file = 'results/calculix_forward_case' + str(icase) + '_sample' + str(isample)
         with open(new_file + '.inp', 'w') as file:
             file.writelines(lines)
 
@@ -1656,10 +1656,10 @@ class ccx_model(dt_model):
         os.system('ccx ' + new_file + ' > ' + new_file + '.out')
 
         # Read unknown at sensors
-        sensor_unkno = self.get_unknown_at_sensors(icase, new_file + '.dat')
+        sensor_unkno = self.get_unknown_at_sensors(new_file + '.dat')
 
         # Return icase and unknown at sensors
-        return icase, sensor_unkno
+        return icase, isample, sensor_unkno
 
 
     """
@@ -1710,7 +1710,7 @@ class ccx_model(dt_model):
         self.generate_sensor_diff_vtk(icase, 0, new_file)
 
         # Read unknown at sensors
-        sensor_unkno = self.get_unknown_at_sensors(icase, new_file + '.dat')
+        sensor_unkno = self.get_unknown_at_sensors(new_file + '.dat')
 
         # Return icase, unknown at sensors
         return icase, sensor_unkno
@@ -1722,11 +1722,12 @@ class ccx_model(dt_model):
          Modifies the elastic properties of the reference input file
          and runs Calculix to obtain the gradient for a given target strength_factor
     """
-    def compute_gradient(self, icase):
-        # No more than one sample per case
-        isample = 0
+    def compute_gradient(self, icase, isample):
         # Read the reference file
-        ref_file = "results/ref/calculix_adjoint_case" + str(icase)
+        if self.nsample <= 1:
+            ref_file = "results/ref/calculix_adjoint_case" + str(icase)
+        else:
+            ref_file = "results/ref/calculix_adjoint_case" + str(icase) + "_sample" + str(isample)
         with open(ref_file + '.inp', 'r') as file:
             lines = file.readlines()
 
@@ -1777,7 +1778,7 @@ class ccx_model(dt_model):
                     lines[i + 3] = newline
 
         # Writing the modified file to a new file
-        new_file = 'results/calculix_adjoint_case' + str(icase) + '_isample' + str(isample)
+        new_file = 'results/calculix_adjoint_case' + str(icase) + '_sample' + str(isample)
         with open(new_file + '.inp', 'w') as file:
             file.writelines(lines)
 
@@ -2037,8 +2038,8 @@ class ccx_model(dt_model):
     def add_results_to_movie_serial(self, icase):
         # Generate VTKs
         isample = 0
-        filename_fwd = 'results/calculix_forward_case' + str(icase) + '_isample' + str(isample)
-        filename_adj = 'results/calculix_adjoint_case' + str(icase) + '_isample' + str(isample)
+        filename_fwd = 'results/calculix_forward_case' + str(icase) + '_sample' + str(isample)
+        filename_adj = 'results/calculix_adjoint_case' + str(icase) + '_sample' + str(isample)
         # Copy into movie
         if self.ntime <= 1:
             generate_vtk(filename_fwd + '.frd')
@@ -2089,18 +2090,34 @@ class ccx_model(dt_model):
     """
     def objective(self):
         obj = 0.0
-        if self.obj_type == -1:
-            with ProcessPoolExecutor(max_workers=self.nproc_cases) as executor:
-                run_futures = [executor.submit(self.compute_objective, icase) \
-                               for icase in range(self.ncase)]
-                for future in as_completed(run_futures):
-                    try:
-                        icase, sensor_unkno = future.result()
-                        for itime in range(self.ntime):
-                            self.sensor_unkno_curr[icase][itime][0] = sensor_unkno[itime]
-                        obj += self.get_objective(icase, 0)
-                    except Exception as exc:
-                        print(f'Exception in compute_objective: {exc}')
+        with ProcessPoolExecutor(max_workers=self.nproc_cases) as executor:
+            run_futures = {executor.submit(self.compute_objective, icase, isample): \
+                           (icase, isample) for icase, isample in product(range(self.ncase), range(self.nsample))}
+            for future in as_completed(run_futures):
+                try:
+                    icase, isample, sensor_unkno = future.result()
+                    for itime in range(self.ntime):
+                        self.sensor_unkno_curr[icase][itime][isample] = sensor_unkno[itime]
+                    if self.obj_type == -1:
+                        obj += self.get_objective(icase, isample)
+                    elif self.obj_type == 0:
+                        obj += self.integ.weight[isample] * self.pdf(icase, isample, self.integ.gpoint[isample]) \
+                            * self.get_objective(icase, isample)
+                    elif self.obj_type == 1:
+                        obj += self.integ.weight[isample] * self.pdf(icase, isample, self.integ.gpoint[isample]) \
+                            * ( self.plus_func(self.get_objective(icase, isample)-self.var) / (1.0-self.cvar_beta) \
+                                + self.var)
+                    elif self.obj_type == 2:
+                        objval = self.get_objective(icase, isample)
+                        obj += self.integ.weight[isample] * self.pdf(icase, isample, self.integ.gpoint[isample]) \
+                            * (self.risk_lambda*objval + (1.0-self.risk_lambda) * (self.plus_func(objval-self.var) \
+                              / (1.0-self.cvar_beta) + self.var))
+                except Exception as exc:
+                    print(f'Exception in compute_objective: {exc}')
+
+        if self.obj_type in [1, 2]:
+            self.var -= 1.0e-03*self.compute_var_finite_diff()
+            if self.var < self.var_min: self.var = self.var_min
 
         return obj
 
@@ -2112,26 +2129,25 @@ class ccx_model(dt_model):
     """
     def gradient(self):
         obj_grad = np.zeros(self.nelem, dtype=np.float64)
-        if self.obj_type == -1:
-            with ProcessPoolExecutor(max_workers=self.nproc_cases) as executor:
-                run_futures = [executor.submit(self.compute_gradient, icase) \
-                               for icase in range(self.ncase)]
-                for future in as_completed(run_futures):
-                    try:
-                        obj_grad += future.result()
-                    except Exception as exc:
-                        print(f'Exception in compute_gradient: {exc}')
+        with ProcessPoolExecutor(max_workers=self.nproc_cases) as executor:
+            run_futures = {executor.submit(self.compute_gradient, icase, isample): \
+                           (icase, isample) for icase, isample in product(range(self.ncase), range(self.nsample))}
+            for future in as_completed(run_futures):
+                try:
+                    obj_grad += future.result()
+                except Exception as exc:
+                    print(f'Exception in compute_gradient: {exc}')
 
-            for icase in range(self.ncase):
-                isample = 0
-                filename_adj = 'results/calculix_adjoint_case' + str(icase) + '_isample' + str(isample)
-                generate_vtk(filename_adj + '.frd')
-                self.add_grad_to_vtk(filename_adj, obj_grad, smooth=False)
+        for icase in range(self.ncase):
+            isample = 0
+            filename_adj = 'results/calculix_adjoint_case' + str(icase) + '_sample' + str(isample)
+            generate_vtk(filename_adj + '.frd')
+            self.add_grad_to_vtk(filename_adj, obj_grad, smooth=False)
 
-            if self.nsmoothing > 0:
-                self.apply_smoothing(self.nsmoothing, obj_grad)
+        if self.nsmoothing > 0:
+            self.apply_smoothing(self.nsmoothing, obj_grad)
 
-            self.add_grad_to_vtk(filename_adj, obj_grad)
+        self.add_grad_to_vtk(filename_adj, obj_grad)
 
         return obj_grad
 
@@ -2142,7 +2158,7 @@ class ccx_model(dt_model):
          Receives an array of element numbers. Outputs 1 if element is present, 0 otherwise.
     """
     def print_control_space(self, control):
-        os.system('cp results/calculix_forward_case0_isample0.vtk results/control_space.vtk')
+        os.system('cp results/calculix_forward_case0_sample0.vtk results/control_space.vtk')
         with open('results/control_space.vtk', 'a') as fu:
             fu.write('\n')
             fu.write('SCALARS control_space double 1\n')
@@ -2160,7 +2176,7 @@ class ccx_model(dt_model):
          Given two values of strength factor, prints the absolute difference in a vtk file.
     """
     def print_strfac_comparison(self, strfac0, strfac1, filename):
-        runstr = 'cp results/calculix_forward_case0_isample0.vtk results/' + filename + '.vtk'
+        runstr = 'cp results/calculix_forward_case0_sample0.vtk results/' + filename + '.vtk'
         os.system(runstr)
         with open('results/' + filename +'.vtk', 'a') as fu:
             fu.write('\n')

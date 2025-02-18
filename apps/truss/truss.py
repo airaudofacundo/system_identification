@@ -60,7 +60,6 @@ if __name__ == "__main__":
                   'risk_lambda': 0.0,
                   'error_lower': 0.0,
                   'error_upper': 0.0,
-                  'sparse_grid': False,
                   'dt': 0.0,
                   'ntime': 1,
                   'gradient_factor': 1.0}
