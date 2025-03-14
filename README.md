@@ -63,6 +63,8 @@ Localizes damage on structures by performing adjoint optimization over the Young
 
 Use the application present in the `apps` folder as reference.
 
+An example can be found in the [wiki](https://github.com/airaudofacundo/system_identification/wiki/Example-1:-Truss).
+
 ### Peer Reviewed Articles ###
 
 Below are the articles that make use of this framework. If you find them or this code useful, please make sure to cite them!
