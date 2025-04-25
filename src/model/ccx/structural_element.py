@@ -20,3 +20,16 @@ class structural_element:
 
     def set_density(self, density):
         self.density = density
+
+    def compute_centroid(self, point_coord):
+        xc = 0.0
+        yc = 0.0
+        zc = 0.0
+        for ipoin in self.point:
+            xc += point_coord[ipoin][0]
+            yc += point_coord[ipoin][1]
+            zc += point_coord[ipoin][2]
+        xc /= self.npoin
+        yc /= self.npoin
+        zc /= self.npoin
+        return xc, yc, zc

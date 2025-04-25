@@ -7,8 +7,10 @@ import copy
 import scipy.optimize as opt
 from scipy.linalg import cho_solve, cho_factor
 from scipy.optimize import minimize
+import sys
+import os
 
-def system_identification(dt, input_vars={}, pyrol_file=None):
+def system_identification(model, input_vars={}, pyrol_file=None, output_file=None):
     if pyrol_file is not None:
 
         class opt_objective(Objective):
@@ -16,20 +18,20 @@ def system_identification(dt, input_vars={}, pyrol_file=None):
                 super().__init__()
 
             def value(self, control, tol):
-                dt.model.update_strength_factor(control)
-                obj = copy.copy(dt.model.objective())
+                model.update_strength_factor(control)
+                obj = copy.copy(model.objective())
                 return obj
 
             def gradient(self, grad, control, tol):
-                dt.model.update_strength_factor(control)
-                g = dt.model.gradient()
-                for ielem in range(dt.model.nelem):
+                model.update_strength_factor(control)
+                g = model.gradient()
+                for ielem in range(model.nelem):
                     grad[ielem] = copy.copy(g[ielem])
-                dt.model.add_results_to_movie()
+                model.add_results_to_movie()
 
         # Read inputs
         lower_limit = input_vars.get('lower_limit', 1.0e-01)
-        upper_limit = input_vars.get('upper_limit', 1.0)
+        upper_limit = input_vars.get('upper_limit', 1.0e+00)
 
         # Configure parameter list.
         params = getParametersFromXmlFile(pyrol_file)
@@ -37,15 +39,23 @@ def system_identification(dt, input_vars={}, pyrol_file=None):
         # Set the output stream.
         stream = getCout()
 
+        if output_file is not None:
+            # Redirect stdout and stderr
+            log_file = open(output_file, "w")
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.dup2(log_file.fileno(), sys.stdout.fileno())  # Redirect stdout
+            os.dup2(log_file.fileno(), sys.stderr.fileno())  # Redirect stderr
+
         # Set bounds.
-        lower_bounds = myVector(np.full(dt.model.nelem, lower_limit))
-        upper_bounds = myVector(np.full(dt.model.nelem, upper_limit))
+        lower_bounds = myVector(np.full(model.nelem, lower_limit))
+        upper_bounds = myVector(np.full(model.nelem, upper_limit))
         bounds = Bounds(lower_bounds, upper_bounds)
 
         # Control and gradient variables
-        control = myVector(np.ones(dt.model.nelem, dtype=np.float64))
-        for icontrol in range(dt.model.nelem):
-            control[icontrol] = dt.model.strength_factor[icontrol]
+        control = myVector(np.ones(model.nelem, dtype=np.float64))
+        for icontrol in range(model.nelem):
+            control[icontrol] = model.strength_factor[icontrol]
         grad = control.dual()
 
         # Set up the problem.
@@ -57,17 +67,25 @@ def system_identification(dt, input_vars={}, pyrol_file=None):
         solver = Solver(problem, params)
         solver.solve(stream)
 
+        if output_file is not None:
+            # Restore stdout/stderr
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
+
+            # Close the log file
+            log_file.close()
+
     else:
 
         def value(control):
-            dt.model.update_strength_factor(control)
-            obj = copy.copy(dt.model.objective())
+            model.update_strength_factor(control)
+            obj = copy.copy(model.objective())
             return obj
 
         def gradient(control):
-            dt.model.update_strength_factor(control)
-            grad = dt.model.gradient()
-            dt.model.add_results_to_movie()
+            model.update_strength_factor(control)
+            grad = model.gradient()
+            model.add_results_to_movie()
             return grad
 
         # Read inputs
@@ -75,15 +93,31 @@ def system_identification(dt, input_vars={}, pyrol_file=None):
         upper_limit = input_vars.get('upper_limit', 1.0)
 
         # Bounds
-        lower_bounds = np.full(dt.model.nelem, lower_limit)
-        upper_bounds = np.full(dt.model.nelem, upper_limit)
+        lower_bounds = np.full(model.nelem, lower_limit)
+        upper_bounds = np.full(model.nelem, upper_limit)
         bounds = opt.Bounds(lower_bounds, upper_bounds)
 
         # Control and gradient variables
-        control = np.ones(dt.model.nelem, dtype=np.float64)
-        for icontrol in range(dt.model.nelem):
-            control[icontrol] = dt.model.strength_factor[icontrol]
-        grad = np.zeros(dt.model.nelem, dtype=np.float64)
+        control = np.ones(model.nelem, dtype=np.float64)
+        for icontrol in range(model.nelem):
+            control[icontrol] = model.strength_factor[icontrol]
+        grad = np.zeros(model.nelem, dtype=np.float64)
+
+        if output_file is not None:
+            # Duplicate stdout and stderr
+            log_file = open(output_file, "w")
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.dup2(log_file.fileno(), sys.stdout.fileno())  # Redirect stdout
+            os.dup2(log_file.fileno(), sys.stderr.fileno())  # Redirect stderr
 
         res = minimize(value, control, method='L-BFGS-B', jac=gradient, bounds=bounds, \
-                       options={'gtol': 1e-6, 'disp': True})
+                       options={'gtol': 1e-12, 'disp': True})
+
+        if output_file is not None:
+            # Restore stdout/stderr
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
+
+            # Close the log file
+            log_file.close()

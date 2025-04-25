@@ -102,4 +102,4 @@ if __name__ == "__main__":
     
     set_target(dt.model)
 
-    system_identification(dt, pyrol_file="pyrol_input.xml")
+    system_identification(dt.model, pyrol_file="pyrol_input.xml")

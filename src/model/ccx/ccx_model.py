@@ -13,6 +13,7 @@ from scipy.spatial import KDTree
 from itertools import product
 from src.model.ccx.sparsegrid import SparseInterpolator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from collections import deque
 
 """
     ccx_model
@@ -70,6 +71,9 @@ class ccx_model(dt_model):
     # Determine whether there is uncertainty in the run
     is_uncertain = False
 
+    # Do vertex morphing?
+    do_vertex_morphing = False
+
     # Determine whether run is static or synamic
     run_type = 'static'
 
@@ -85,7 +89,7 @@ class ccx_model(dt_model):
     var_min = 1.0e-16
 
     # Initial value for var. For use in CVaR case
-    var = 1.0e-06
+    var = 1.0e-08
 
     # Sparse grid intepolation parameters
     interpolation_nval = 2
@@ -109,6 +113,8 @@ class ccx_model(dt_model):
         nproc_ccx       = input_vars.get('nproc_ccx', 1)
         nproc_cases     = input_vars.get('nproc_cases', 1)
         nsmoothing      = input_vars.get('nsmoothing', 5)
+        do_vtx_morphing = input_vars.get('do_vertex_morphing', False)
+        vm_radius       = input_vars.get('vm_radius', 0.0)
         run_type        = input_vars.get('run_type', 'static')
         obj_type        = input_vars.get('obj_type', 'basic')
         ngauss          = input_vars.get('ngauss', 3)
@@ -116,8 +122,6 @@ class ccx_model(dt_model):
         nrandom         = input_vars.get('nrandom', 0)
         cvar_beta       = input_vars.get('cvar_beta', 0.1)
         risk_lambda     = input_vars.get('risk_lambda', 0.5)
-        error_lower     = input_vars.get('error_lower', 0.8)
-        error_upper     = input_vars.get('error_upper', 1.2)
         dt              = input_vars.get('dt', 0.0)
         ntime           = input_vars.get('ntime', 1)
         gradient_factor = input_vars.get('gradient_factor', 1.0)
@@ -125,6 +129,7 @@ class ccx_model(dt_model):
         self.set_ncase(ncase)
         self.set_nproc(nproc_ccx, nproc_cases)
         self.set_objective_type(obj_type)
+        self.gradient_factor = gradient_factor
 
         self.run_type = run_type
         self.dt = dt
@@ -139,11 +144,27 @@ class ccx_model(dt_model):
         # Only read mesh from first case.. Hope it's the same for all!
         self.read_inp_file("ccx_input/calculix_forward_case0.inp")
 
+        # Generate ref files
+        os.system('mkdir -p results/')
+        os.system('mkdir -p results/ref/')
+        if self.obj_type == -1:
+            for icase in range(self.ncase):
+                os.system('cp ccx_input/calculix_forward_case' + str(icase) + '.inp ' \
+                          'results/ref/calculix_forward_case' + str(icase) + '_sample0.inp')
+        else:
+            for icase in range(self.ncase):
+                self.generate_sample_files(icase)
+
         self.compute_stiffness()
 
         self.strength_factor = np.ones(self.nelem, dtype=np.float64)
 
         self.nsmoothing = nsmoothing
+
+        self.vm_radius = vm_radius
+        self.do_vertex_morphing = do_vtx_morphing
+        if self.do_vertex_morphing:
+            self.setup_vertex_morphing()
 
 
     """
@@ -172,7 +193,6 @@ class ccx_model(dt_model):
 
             for line in file:
                 line = line.strip()
-
                 # Check for keywords
                 if line.startswith('*'):
                     if line.startswith('*NODE'):
@@ -212,6 +232,7 @@ class ccx_model(dt_model):
                             elmat[material_name] = []
                         for elem_id in elset_list[elset_name]:
                             elmat[material_name].extend([elem_id])
+                            section_types[elem_id] = 'SOLID'
                     elif line.startswith('*BEAM'):
                         parts = line.split(',')
                         for part in parts:
@@ -402,10 +423,10 @@ class ccx_model(dt_model):
         elif obj_type == 'neutral' or obj_type == 0:
             self.obj_type = 0
             self.is_uncertain = True
-        elif obj_type == 'cvar' or obj_type == 1:
+        elif obj_type == 'cvar' or obj_type == 'CVaR' or obj_type == 1:
             self.obj_type = 1
             self.is_uncertain = True
-        elif obj_type == 'neutral+cvar' or obj_type == 2:
+        elif obj_type == 'neutral+cvar' or obj_type == 'neutral+CVaR' or obj_type == 2:
             self.obj_type = 2
             self.is_uncertain = True
         elif obj_type == 'mean+semideviation' or obj_type == 3:
@@ -428,7 +449,12 @@ class ccx_model(dt_model):
         self.integ = integrator(gauss_order, 'hypercube', random_dimension)
         self.nsample = self.integ.integ_terms
         self.random_dimension = random_dimension
-        self.random_factor = np.zeros((self.nsample, self.random_dimension), dtype = np.float64)
+        self.random_pdf = np.zeros(self.random_dimension, dtype = np.int32)
+        self.random_lower_bound = np.zeros(self.random_dimension, dtype = np.float64)
+        self.random_upper_bound = np.zeros(self.random_dimension, dtype = np.float64)
+        self.random_normal_mean = np.zeros(self.random_dimension, dtype = np.float64)
+        self.random_normal_stddev = np.zeros(self.random_dimension, dtype = np.float64)
+        self.random_skewnormal_param = np.zeros(self.random_dimension, dtype = np.float64)
 
 
     """
@@ -498,7 +524,7 @@ class ccx_model(dt_model):
         self.nsensor = nsensor
         self.sensor_point = np.zeros(nsensor, dtype=np.int32)
         self.sensor_unkno_targ = np.zeros((self.ncase, self.ntime, nsensor, 3), dtype=np.float64)
-        self.sensor_unkno_curr = np.zeros((self.ncase, self.nsample, self.ntime, nsensor, 3), dtype=np.float64)
+        self.sensor_unkno_curr = np.zeros((self.ncase, self.ntime, self.nsample, nsensor, 3), dtype=np.float64)
         self.point_tree = KDTree(self.point_coord, leafsize=100)
 
 
@@ -643,6 +669,51 @@ class ccx_model(dt_model):
     """
     def set_sensor(self, isensor, ipoin):
         self.sensor_point[isensor] = ipoin
+
+
+    """
+    [30]  setup_vertex_morphing
+
+         Computes centroids and connection matrices to set up vertex morphing.
+    """
+    def setup_vertex_morphing(self):
+        print(f"Setting up vertex morphing")
+        # Computing the centroids
+        self.centroid_coord = [[0.0, 0.0, 0.0] for i in range(self.nelem)]
+        for ielem in range(self.nelem):
+            self.centroid_coord[ielem] = self.element[ielem].compute_centroid(self.point_coord)
+
+        # Making the element connectivity dictionary
+        print(f"Making element connectivities dictionary")
+        # First, make elements sorrounding points list
+        elements_in_point = [[] for i in range(self.npoin)]
+        for ielem in range(self.nelem):
+            for ipoin in self.element[ielem].point:
+                elements_in_point[ipoin].append(ielem)
+
+        # Then, make elements sorrounding elements list
+        self.element_connectivity = {}
+        for ielem in range(self.nelem):
+            connectivity_list = []
+            for ipoin in self.element[ielem].point:
+                for jelem in elements_in_point[ipoin]:
+                    if not jelem in connectivity_list:
+                        connectivity_list.append(jelem)
+            self.element_connectivity[ielem] = connectivity_list
+
+        self.vm_vicinity_elements_wts = {} # Final dictionary
+
+        with ProcessPoolExecutor(max_workers=max(self.nproc_cases, self.nproc_ccx)) as executor:
+            args_list = [
+                (ielem, self.centroid_coord, self.element_connectivity, self.vm_radius)
+                for ielem in range(self.nelem)
+            ]
+        
+            results = executor.map(setup_vertex_morphing_worker, args_list)
+
+            # Collect results
+            for ielem, vicinity_elem_wts in results:
+                self.vm_vicinity_elements_wts[ielem] = vicinity_elem_wts
 
 
     """
@@ -803,7 +874,7 @@ class ccx_model(dt_model):
     def compute_stiffness(self):
         os.makedirs('stiffness', exist_ok=True)
         # Compute stiffnesses in parallel
-        with ProcessPoolExecutor(max_workers=np.max([self.nproc_cases,self.nproc_ccx])) as executor:
+        with ThreadPoolExecutor(max_workers=np.max([self.nproc_cases,self.nproc_ccx])) as executor:
             run_futures = [executor.submit(self.compute_stiffness_serial, ielem) for ielem in range(self.nelem)]
             for future in as_completed(run_futures):
                 try:
@@ -833,8 +904,11 @@ class ccx_model(dt_model):
         elif self.element[ielem].element_type.strip() == 'S6':
             n = 45
             self.element[ielem].stiffness = np.zeros((n,n), dtype=np.float64)
+        elif self.element[ielem].element_type.strip() == 'C3D10':
+            n = 30
+            self.element[ielem].stiffness = np.zeros((n,n), dtype=np.float64)
         elif self.element[ielem].element_type.strip() == 'C3D8':
-            n =24
+            n = 24
             self.element[ielem].stiffness = np.zeros((n,n), dtype=np.float64)
         elif self.element[ielem].element_type.strip() == 'C3D6':
             n = 18
@@ -900,8 +974,11 @@ class ccx_model(dt_model):
         elif self.element[ielem].element_type.strip() == 'S6':
             n = 45
             stiffness = np.zeros((n,n), dtype=np.float64)
+        elif self.element[ielem].element_type.strip() == 'C3D10':
+            n = 30
+            stiffness = np.zeros((n,n), dtype=np.float64)
         elif self.element[ielem].element_type.strip() == 'C3D8':
-            n =24
+            n = 24
             stiffness = np.zeros((n,n), dtype=np.float64)
         elif self.element[ielem].element_type.strip() == 'C3D6':
             n = 18
@@ -1003,7 +1080,7 @@ class ccx_model(dt_model):
                                                  (z12 * x13 - x12 * z13) ** 2 +
                                                  (x12 * y13 - y12 * x13) ** 2)
                 self.mass[ielem] *= self.element[ielem].shell_thickness
-            elif self.element[ielem].element_type.strip() == 'C3D4':
+            elif self.element[ielem].element_type.strip() in ['C3D4', 'C3D10']:
                 ip1 = self.element[ielem].point[0]
                 ip2 = self.element[ielem].point[1]
                 ip3 = self.element[ielem].point[2]
@@ -1244,6 +1321,9 @@ class ccx_model(dt_model):
                 elif npoin == 8:
                     parts = fu.readline().split()
                     connect3d[:8, ielem] = list(map(int, parts[1:]))
+                elif npoin == 10:
+                    parts = fu.readline().split()
+                    connect3d[:10, ielem] = list(map(int, parts[1:]))
                 elif npoin == 15:
                     parts = fu.readline().split()
                     connect3d[:10, ielem] = list(map(int, parts[1:]))
@@ -1364,6 +1444,9 @@ class ccx_model(dt_model):
                 elif npoin == 8:
                     parts = fu.readline().split()
                     connect3d[:8, ielem] = list(map(int, parts[1:]))
+                elif npoin == 10:
+                    parts = fu.readline().split()
+                    connect3d[:10, ielem] = list(map(int, parts[1:]))
                 elif npoin == 15:
                     parts = fu.readline().split()
                     connect3d[:10, ielem] = list(map(int, parts[1:]))
@@ -1462,6 +1545,8 @@ class ccx_model(dt_model):
             npoin = 20
         elif elem_type == 5:
             npoin = 15
+        elif elem_type == 6:
+            npoin = 10
         else:
             print(f"Unimplemented elem_type: {elem_type}")
             raise ValueError("Unimplemented elem_type")
@@ -1614,6 +1699,24 @@ class ccx_model(dt_model):
 
 
     """
+    [44]  apply_vertex_morphing
+
+         Performs smoothing by applying vertex morphing.
+    """
+    def apply_vertex_morphing(self, elem_var):
+        orig_elem_var = elem_var
+        for ielem in range(self.nelem):
+            var = 0.0
+            elem_wts = self.vm_vicinity_elements_wts[ielem]
+            for k,v in elem_wts.items():
+                var += orig_elem_var[k] * v
+
+            elem_var[ielem] = var
+
+        return elem_var
+
+
+    """
     [45]  compute_objective
 
          Modifies the elastic properties of the reference input file
@@ -1621,10 +1724,7 @@ class ccx_model(dt_model):
     """
     def compute_objective(self, icase, isample):
         # Read the reference file
-        if self.nsample <= 1:
-            ref_file = "ccx_input/calculix_forward_case" + str(icase)
-        else:
-            ref_file = "ccx_input/calculix_forward_case" + str(icase) + "_sample" + str(isample)
+        ref_file = "results/ref/calculix_forward_case" + str(icase) + "_sample" + str(isample)
         with open(ref_file + '.inp', 'r') as file:
             lines = file.readlines()
 
@@ -1672,7 +1772,7 @@ class ccx_model(dt_model):
         # Make target folder
         os.system('mkdir -p results/target')
         # Read the reference file
-        ref_file = "ccx_input/calculix_forward_case" + str(icase)
+        ref_file = "results/ref/calculix_forward_case" + str(icase) + '_sample0'
         with open(ref_file + '.inp', 'r') as file:
             lines = file.readlines()
 
@@ -1724,10 +1824,7 @@ class ccx_model(dt_model):
     """
     def compute_gradient(self, icase, isample):
         # Read the reference file
-        if self.nsample <= 1:
-            ref_file = "results/ref/calculix_adjoint_case" + str(icase)
-        else:
-            ref_file = "results/ref/calculix_adjoint_case" + str(icase) + "_sample" + str(isample)
+        ref_file = "results/ref/calculix_adjoint_case" + str(icase)
         with open(ref_file + '.inp', 'r') as file:
             lines = file.readlines()
 
@@ -1829,6 +1926,21 @@ class ccx_model(dt_model):
     """
     def pdf(self, icase, isample, x):
         pdf = 1.0
+        for irandom in range(self.random_dimension):
+            if self.random_pdf[irandom] == 0:
+                # Uniform
+                pdf *= 1.0/(self.random_upper_bound[irandom]-self.random_lower_bound[irandom])
+            elif self.random_pdf[irandom] == 1:
+                # Normal
+                pdf *= norm.pdf(x[irandom],                                \
+                                loc = self.random_normal_mean[irandom],    \
+                                scale = self.random_normal_stddev[irandom] )
+            elif self.random_pdf[irandom] == 2:
+                # Skew Normal
+                pdf *= skewnorm.pdf(x[irandom],                                \
+                                    a = self.random_skewnormal_param[irandom], \
+                                    loc = self.random_normal_mean[irandom],    \
+                                    scale = self.random_normal_stddev[irandom] )
         return pdf
 
 
@@ -1839,7 +1951,7 @@ class ccx_model(dt_model):
          with respect to the VaR. For CVaR runs.
     """
     def compute_var_finite_diff(self):
-        delta = 1.0e-04
+        delta = 1.0e-09
 
         var2 = self.var+delta
         if self.var-delta < self.var_min:
@@ -2090,6 +2202,7 @@ class ccx_model(dt_model):
     """
     def objective(self):
         obj = 0.0
+        #ncvar = 0
         with ProcessPoolExecutor(max_workers=self.nproc_cases) as executor:
             run_futures = {executor.submit(self.compute_objective, icase, isample): \
                            (icase, isample) for icase, isample in product(range(self.ncase), range(self.nsample))}
@@ -2107,6 +2220,8 @@ class ccx_model(dt_model):
                         obj += self.integ.weight[isample] * self.pdf(icase, isample, self.integ.gpoint[isample]) \
                             * ( self.plus_func(self.get_objective(icase, isample)-self.var) / (1.0-self.cvar_beta) \
                                 + self.var)
+                        #if self.plus_func(self.get_objective(icase, isample)-self.var) > 0.0:
+                        #    ncvar += 1
                     elif self.obj_type == 2:
                         objval = self.get_objective(icase, isample)
                         obj += self.integ.weight[isample] * self.pdf(icase, isample, self.integ.gpoint[isample]) \
@@ -2115,10 +2230,7 @@ class ccx_model(dt_model):
                 except Exception as exc:
                     print(f'Exception in compute_objective: {exc}')
 
-        if self.obj_type in [1, 2]:
-            self.var -= 1.0e-03*self.compute_var_finite_diff()
-            if self.var < self.var_min: self.var = self.var_min
-
+        #print(f"ncvar,nobj = {ncvar}, {self.ncase*self.nsample}")
         return obj
 
 
@@ -2144,10 +2256,17 @@ class ccx_model(dt_model):
             generate_vtk(filename_adj + '.frd')
             self.add_grad_to_vtk(filename_adj, obj_grad, smooth=False)
 
+        if self.do_vertex_morphing:
+            self.apply_vertex_morphing(obj_grad)
+
         if self.nsmoothing > 0:
             self.apply_smoothing(self.nsmoothing, obj_grad)
 
         self.add_grad_to_vtk(filename_adj, obj_grad)
+
+        if self.obj_type in [1, 2]:
+            self.var -= 1.0e-08*self.compute_var_finite_diff()
+            if self.var < self.var_min: self.var = self.var_min
 
         return obj_grad
 
@@ -2184,3 +2303,155 @@ class ccx_model(dt_model):
             fu.write('LOOKUP_TABLE my_table\n')
             for icontrol in range(self.nelem):
                 fu.write(f"{np.abs(strfac0[icontrol]-strfac1[icontrol])}\n")
+
+    """
+    [60]  generate_sample_files
+
+         Reads calculix input file
+    """
+    def generate_sample_files(self, icase):
+        # Read the reference file
+        ref_file = "ccx_input/calculix_forward_case" + str(icase)
+        with open(ref_file + '.inp', 'r') as file:
+            lines = file.readlines()
+        
+        # Pattern to detect random variables
+        random_var_pattern = re.compile(f'\*\*random_var')
+        cload_pattern = re.compile(r'\*CLOAD')
+        dload_pattern = re.compile(r'\*DLOAD')
+        temperature_pattern = re.compile('\*TEMPERATURE')
+        grav_pattern = re.compile(r'GRAV')
+
+        # Counter for materials
+        material_count = 0
+
+        # Process file lines
+        for i, line in enumerate(lines):
+            if random_var_pattern.search(line):
+                sline = line.split(',')
+                irandom = int(sline[1])
+                lower_bound = float(sline[2])
+                upper_bound = float(sline[3])
+                pdf_type = sline[4].strip()
+                if pdf_type == 'uniform':
+                    self.random_pdf[irandom] = 0
+                    self.random_lower_bound[irandom] = lower_bound
+                    self.random_upper_bound[irandom] = upper_bound
+                elif pdf_type == 'normal':
+                    self.random_pdf[irandom] = 1
+                    self.random_lower_bound[irandom] = lower_bound
+                    self.random_upper_bound[irandom] = upper_bound
+                    normal_mean = float(sline[5])
+                    normal_stddev = float(sline[6])
+                    self.random_normal_mean[irandom] = normal_mean
+                    self.random_normal_stddev[irandom] = normal_stddev
+                elif pdf_type == 'skew_normal' or pdf_type == 'skewnormal':
+                    self.random_pdf[irandom] = 2
+                    self.random_lower_bound[irandom] = lower_bound
+                    self.random_upper_bound[irandom] = upper_bound
+                    normal_mean = float(sline[5])
+                    normal_stddev = float(sline[6])
+                    self.random_normal_mean[irandom] = normal_mean
+                    self.random_normal_stddev[irandom] = normal_stddev
+                    skewnormal_param = float(sline[7])
+                    self.random_skewnormal_param[irandom] = skewnormal_param
+
+        # Scale weights
+        for irandom in range(self.random_dimension):
+            for isample in range(self.nsample):
+                self.integ.weight[isample] *= 0.5*(self.random_upper_bound[irandom]-self.random_lower_bound[irandom])
+
+        # For each sample write into a new file
+        for isample in range(self.nsample):
+
+            new_lines = copy.copy(lines)
+            
+            for i, line in enumerate(lines):
+                if random_var_pattern.search(line):
+                    sline = line.split(',')
+                    irandom = int(sline[1])
+                    if cload_pattern.search(lines[i-1]):
+                        # Retrieve loads
+                        sline1 = lines[i+1].split(',')
+                        sline2 = lines[i+2].split(',')
+                        sline3 = lines[i+3].split(',')
+                        loadx = float(sline1[2])
+                        loady = float(sline2[2])
+                        loadz = float(sline3[2])
+                        # Scale loads
+                        random_factor = 0.5*(self.random_lower_bound[irandom]+self.random_upper_bound[irandom]) \
+                            + 0.5*(self.random_upper_bound[irandom]-self.random_lower_bound[irandom]) \
+                            *self.integ.gpoint[isample][irandom]
+                        loadx *= random_factor
+                        loady *= random_factor
+                        loadz *= random_factor
+                        # Change corresponding lines
+                        new_lines[i+1] = f"{sline1[0]}, {sline1[1]}, {loadx:16.8E}\n"
+                        new_lines[i+2] = f"{sline2[0]}, {sline2[1]}, {loady:16.8E}\n"
+                        new_lines[i+3] = f"{sline3[0]}, {sline3[1]}, {loadz:16.8E}\n"
+                    elif dload_pattern.search(lines[i-1]):
+                        # Retrieve load
+                        sline = lines[i+1].split(',')
+                        load = sline[2]
+                        random_factor = 0.5*(self.random_lower_bound[irandom]+self.random_upper_bound[irandom]) \
+                            + 0.5*(self.random_upper_bound[irandom]-self.random_lower_bound[irandom]) \
+                            *self.integ.gpoint[isample][irandom]
+                        load *= random_factor
+                        # Change corresponding line
+                        new_lines[i+1] = f"{sline[0]}, {sline[1]}, {load:16.8E}\n"
+                    elif temperature_pattern.search(lines[i-1]):
+                        # Retrieve temperature
+                        sline = lines[i+1].split(',')
+                        temperature = float(sline[1])
+                        random_factor = 0.5*(self.random_lower_bound[irandom]+self.random_upper_bound[irandom]) \
+                            + 0.5*(self.random_upper_bound[irandom]-self.random_lower_bound[irandom]) \
+                            *self.integ.gpoint[isample][irandom]
+                        temperature *= random_factor
+                        # Change corresponding line
+                        new_lines[i+1] = f"{sline[0]}, {temperature:16.8E}\n"
+                        
+
+            new_file = 'results/ref/calculix_forward_case' + str(icase) + '_sample' + str(isample)
+            with open(new_file + '.inp', 'w') as file:
+                file.writelines(new_lines)
+
+def setup_vertex_morphing_worker(args):
+    """ Worker function for parallel processing """
+    ielem, centroid_coord, element_connectivity, vm_radius = args
+
+    print(f"working on ielem = {ielem}")
+
+    icentroid = np.array(centroid_coord[ielem])  # Reference centroid
+    max_dist_sq = vm_radius ** 2  # Squared radius for efficiency
+
+    # BFS Expansion
+    vicinity_elements = set()
+    search_queue = [ielem]
+    visited = set([ielem])
+
+    while search_queue:
+        elem = search_queue.pop(0)
+        jcentroid = np.array(centroid_coord[elem])
+        dist_sq = np.sum((jcentroid - icentroid) ** 2)  # Squared distance
+
+        if dist_sq <= max_dist_sq:
+            vicinity_elements.add(elem)
+            for neighbor in element_connectivity[elem]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    search_queue.append(neighbor)
+
+    # Compute weights
+    vicinity_elem_wts = {}
+    area_weighted_sum = 0.0
+    for elem in vicinity_elements:
+        d = np.linalg.norm(np.array(centroid_coord[elem]) - icentroid)
+        weight = max(0.0, (vm_radius - d) / vm_radius)
+        vicinity_elem_wts[elem] = weight
+        area_weighted_sum += weight
+
+    if area_weighted_sum > 0:
+        for elem in vicinity_elem_wts:
+            vicinity_elem_wts[elem] /= area_weighted_sum
+
+    return ielem, vicinity_elem_wts
