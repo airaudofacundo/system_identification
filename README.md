@@ -62,3 +62,17 @@ Localizes damage on structures by performing adjoint optimization over the Young
 ### Quick Start ###
 
 Use the application present in the `apps` folder as reference.
+
+An example can be found in the [wiki](https://github.com/airaudofacundo/system_identification/wiki/Example-1:-Truss).
+
+### Peer Reviewed Articles ###
+
+Below are the articles that make use of this framework. If you find them or this code useful, please make sure to cite them!
+
+   1. Airaudo, Facundo N., et al. "[Adjoint-based determination of weaknesses in structures.](https://www.sciencedirect.com/science/article/abs/pii/S0045782523005959)" *Computer Methods in Applied Mechanics and Engineering* 417 (2023): 116471.
+
+   2. Airaudo, Facundo N., Harbir Antil, and Rainald Löhner. "[Conditional value at risk for damage identification in structural digital twins.](https://www.sciencedirect.com/science/article/abs/pii/S0168874X25000058)" *Finite Elements in Analysis and Design* 245 (2025): 104316.
+
+   3. Löhner, Rainald, et al. "[High‐fidelity digital twins: Detecting and localizing weaknesses in structures.](https://onlinelibrary.wiley.com/doi/full/10.1002/nme.7568)" *International Journal for Numerical Methods in Engineering* 125.21 (2024): e7568.
+
+   4. Ansari, Talhah Shamshad Ali, et al. "[Adjoint-based recovery of thermal fields from displacement or strain measurements.](https://www.sciencedirect.com/science/article/pii/S0045782525000908)" *Computer Methods in Applied Mechanics and Engineering* 438 (2025): 117818.
