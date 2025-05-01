@@ -1366,6 +1366,17 @@ class ccx_model(dt_model):
                     connect_aux[18] = connect3d[17][ielem]
                     connect_aux[19] = connect3d[13][ielem]
                     connect3d[:20, ielem] = connect_aux
+                elif npoin_per_elem[ielem] == 8:
+                    connect_aux = np.zeros(8, dtype=np.int32)
+                    connect_aux[0]  = connect3d[0][ielem]  # 1
+                    connect_aux[1]  = connect3d[3][ielem]  # 4
+                    connect_aux[2]  = connect3d[7][ielem]  # 8
+                    connect_aux[3]  = connect3d[4][ielem]  # 5
+                    connect_aux[4]  = connect3d[10][ielem] # 2
+                    connect_aux[5]  = connect3d[2][ielem]  # 3
+                    connect_aux[6]  = connect3d[6][ielem]  # 7
+                    connect_aux[7]  = connect3d[5][ielem] # 6
+                    connect3d[:8, ielem] = connect_aux
                 elif npoin_per_elem[ielem] == 15:
                     connect_aux = np.zeros(15, dtype=np.int32)
                     connect_aux[0]  = connect3d[0][ielem]
@@ -1384,6 +1395,16 @@ class ccx_model(dt_model):
                     connect_aux[13] = connect3d[8][ielem]
                     connect_aux[14] = connect3d[14][ielem]
                     connect3d[:15, ielem] = connect_aux
+                elif npoin_per_elem[ielem] == 6:
+                    connect_aux = np.zeros(6, dtype=np.int32)
+                    connect_aux[0]  = connect3d[0][ielem]
+                    connect_aux[1]  = connect3d[3][ielem]
+                    connect_aux[2]  = connect3d[1][ielem]
+                    connect_aux[3]  = connect3d[4][ielem]
+                    connect_aux[4]  = connect3d[2][ielem]
+                    connect_aux[5]  = connect3d[5][ielem]
+                    connect3d[:6, ielem] = connect_aux
+                    
 
             for _ in range(itime*(8+npoin3d)):
                 fu.readline()
@@ -1489,6 +1510,17 @@ class ccx_model(dt_model):
                     connect_aux[18] = connect3d[17][ielem]
                     connect_aux[19] = connect3d[13][ielem]
                     connect3d[:20, ielem] = connect_aux
+                elif npoin_per_elem[ielem] == 8:
+                    connect_aux = np.zeros(8, dtype=np.int32)
+                    connect_aux[0]  = connect3d[0][ielem]  # 1
+                    connect_aux[1]  = connect3d[3][ielem]  # 4
+                    connect_aux[2]  = connect3d[7][ielem]  # 8
+                    connect_aux[3]  = connect3d[4][ielem]  # 5
+                    connect_aux[4]  = connect3d[10][ielem] # 2
+                    connect_aux[5]  = connect3d[2][ielem]  # 3
+                    connect_aux[6]  = connect3d[6][ielem]  # 7
+                    connect_aux[7]  = connect3d[5][ielem]  # 6
+                    connect3d[:8, ielem] = connect_aux
                 elif npoin_per_elem[ielem] == 15:
                     connect_aux = np.zeros(15, dtype=np.int32)
                     connect_aux[0]  = connect3d[0][ielem]
@@ -1507,6 +1539,15 @@ class ccx_model(dt_model):
                     connect_aux[13] = connect3d[8][ielem]
                     connect_aux[14] = connect3d[14][ielem]
                     connect3d[:15, ielem] = connect_aux
+                elif npoin_per_elem[ielem] == 6:
+                    connect_aux = np.zeros(6, dtype=np.int32)
+                    connect_aux[0]  = connect3d[0][ielem]
+                    connect_aux[1]  = connect3d[3][ielem]
+                    connect_aux[2]  = connect3d[1][ielem]
+                    connect_aux[3]  = connect3d[4][ielem]
+                    connect_aux[4]  = connect3d[2][ielem]
+                    connect_aux[5]  = connect3d[5][ielem]
+                    connect3d[:6, ielem] = connect_aux
 
             for _ in range((self.ntime-1-itime)*(8+npoin3d)):
                 fu.readline()
@@ -2091,13 +2132,13 @@ class ccx_model(dt_model):
                             fu.write(f"*DYNAMIC,ALPHA=-0.3,SOLVER=ITERATIVE CHOLESKY\n")
                             fu.write(f"{self.dt-1.0E-10},{self.dt-1.0E-10}\n")
                             fu.write(f"*AMPLITUDE,NAME=A{self.ntime-1-itime}\n")
-                            #fu.write(f"0.0E+00, 0.5E+00, {0.5*self.dt:16.8E}, 1.0E+00, {self.dt-1.0E-10:16.8E}, 0.5E+00\n")
+                            #fu.write(f"0.0E+00, 0.0E+00, {0.1*self.dt:16.8E}, 1.0E+00, {0.9*self.dt-1.0E-10:16.8E}, 1.0E+00, {self.dt-1.0E-10:16.8E}, 0.0E+00\n")
                             fu.write(f"0.0E+00, 1.0E+00, {self.dt:16.8E}, 1.0E+00\n")
                         else:
                             fu.write(f"*DYNAMIC,ALPHA=-0.3,SOLVER=ITERATIVE CHOLESKY\n")
                             fu.write(f"{self.dt},{self.dt}\n")
                             fu.write(f"*AMPLITUDE,NAME=A{self.ntime-1-itime}\n")
-                            #fu.write(f"0.0E+00, 1.0E+00, {0.5*self.dt:16.8E}, 1.0E+00, {self.dt:16.8E}, 0.5E+00\n")
+                            #fu.write(f"0.0E+00, 0.0E+00, {0.1*self.dt:16.8E}, 1.0E+00, {0.9*self.dt:16.8E}, 1.0E+00, {self.dt:16.8E}, 0.0E+00\n")
                             fu.write(f"0.0E+00, 1.0E+00, {self.dt:16.8E}, 1.0E+00\n")
                         for isensor in range(self.nsensor):
                             fu.write(f"*CLOAD,AMPLITUDE=A{self.ntime-1-itime}\n")
