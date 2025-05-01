@@ -1343,7 +1343,7 @@ class ccx_model(dt_model):
             # Transform connection matrix to have the same order as the stiffness matrix
             # Only necessary for beams
             for ielem in range(self.nelem):
-                if npoin_per_elem[ielem] == 20 and self.element[ielem].element_type /= "C3D20":
+                if npoin_per_elem[ielem] == 20 and self.element[ielem].element_type != "C3D20":
                     connect_aux = np.zeros(20, dtype=np.int32)
                     connect_aux[0]  = connect3d[0][ielem]
                     connect_aux[1]  = connect3d[3][ielem]
@@ -1366,7 +1366,7 @@ class ccx_model(dt_model):
                     connect_aux[18] = connect3d[17][ielem]
                     connect_aux[19] = connect3d[13][ielem]
                     connect3d[:20, ielem] = connect_aux
-                elif npoin_per_elem[ielem] == 8 and self.element[ielem].element_type /= "C3D8":
+                elif npoin_per_elem[ielem] == 8 and self.element[ielem].element_type != "C3D8":
                     connect_aux = np.zeros(8, dtype=np.int32)
                     connect_aux[0]  = connect3d[0][ielem]  # 1
                     connect_aux[1]  = connect3d[3][ielem]  # 4
@@ -1377,7 +1377,7 @@ class ccx_model(dt_model):
                     connect_aux[6]  = connect3d[6][ielem]  # 7
                     connect_aux[7]  = connect3d[5][ielem]  # 6
                     connect3d[:8, ielem] = connect_aux
-                elif npoin_per_elem[ielem] == 15 and self.element[ielem].element_type /= "C3D15":
+                elif npoin_per_elem[ielem] == 15 and self.element[ielem].element_type != "C3D15":
                     connect_aux = np.zeros(15, dtype=np.int32)
                     connect_aux[0]  = connect3d[0][ielem]
                     connect_aux[1]  = connect3d[9][ielem]
@@ -1395,7 +1395,7 @@ class ccx_model(dt_model):
                     connect_aux[13] = connect3d[8][ielem]
                     connect_aux[14] = connect3d[14][ielem]
                     connect3d[:15, ielem] = connect_aux
-                elif npoin_per_elem[ielem] == 6 and self.element[ielem].element_type /= "C3D6":
+                elif npoin_per_elem[ielem] == 6 and self.element[ielem].element_type != "C3D6":
                     connect_aux = np.zeros(6, dtype=np.int32)
                     connect_aux[0]  = connect3d[0][ielem]
                     connect_aux[1]  = connect3d[3][ielem]
@@ -1487,7 +1487,7 @@ class ccx_model(dt_model):
             # Transform connection matrix to have the same order as the stiffness matrix
             # Only necessary for beams
             for ielem in range(self.nelem):
-                if npoin_per_elem[ielem] == 20 and self.element[ielem].element_type /= "C3D20":
+                if npoin_per_elem[ielem] == 20 and self.element[ielem].element_type != "C3D20":
                     connect_aux = np.zeros(20, dtype=np.int32)
                     connect_aux[0]  = connect3d[0][ielem]
                     connect_aux[1]  = connect3d[3][ielem]
@@ -1510,7 +1510,7 @@ class ccx_model(dt_model):
                     connect_aux[18] = connect3d[17][ielem]
                     connect_aux[19] = connect3d[13][ielem]
                     connect3d[:20, ielem] = connect_aux
-                elif npoin_per_elem[ielem] == 8 and self.element[ielem].element_type /= "C3D8":
+                elif npoin_per_elem[ielem] == 8 and self.element[ielem].element_type != "C3D8":
                     connect_aux = np.zeros(8, dtype=np.int32)
                     connect_aux[0]  = connect3d[0][ielem]  # 1
                     connect_aux[1]  = connect3d[3][ielem]  # 4
@@ -1521,7 +1521,7 @@ class ccx_model(dt_model):
                     connect_aux[6]  = connect3d[6][ielem]  # 7
                     connect_aux[7]  = connect3d[5][ielem]  # 6
                     connect3d[:8, ielem] = connect_aux
-                elif npoin_per_elem[ielem] == 15 and self.element[ielem].element_type /= "C3D15":
+                elif npoin_per_elem[ielem] == 15 and self.element[ielem].element_type != "C3D15":
                     connect_aux = np.zeros(15, dtype=np.int32)
                     connect_aux[0]  = connect3d[0][ielem]
                     connect_aux[1]  = connect3d[9][ielem]
@@ -1539,7 +1539,7 @@ class ccx_model(dt_model):
                     connect_aux[13] = connect3d[8][ielem]
                     connect_aux[14] = connect3d[14][ielem]
                     connect3d[:15, ielem] = connect_aux
-                elif npoin_per_elem[ielem] == 6 and self.element[ielem].element_type /= "C3D6":
+                elif npoin_per_elem[ielem] == 6 and self.element[ielem].element_type != "C3D6":
                     connect_aux = np.zeros(6, dtype=np.int32)
                     connect_aux[0]  = connect3d[0][ielem]
                     connect_aux[1]  = connect3d[3][ielem]
