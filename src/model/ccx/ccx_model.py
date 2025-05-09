@@ -68,6 +68,9 @@ class ccx_model(dt_model):
     #          ==  4 == 'entropic_risk'
     obj_type = -1
 
+    # Determine whether to scale sensor differences by the sensor measurements
+    sensor_scaling = False
+
     # Determine whether there is uncertainty in the run
     is_uncertain = False
 
@@ -76,6 +79,9 @@ class ccx_model(dt_model):
 
     # Determine whether run is static or synamic
     run_type = 'static'
+
+    # Determine solver line to use for the adjoint
+    solver_line = '*STATIC'
 
     # Uncertainty variables
 
@@ -134,6 +140,9 @@ class ccx_model(dt_model):
         self.run_type = run_type
         self.dt = dt
         self.ntime = ntime
+
+        if self.ntime > 1:
+            self.run_type = 'dynamic'
 
         # To Do: Put this into read_input_file
         if ngauss > 0 and nrandom > 0:
@@ -266,6 +275,12 @@ class ccx_model(dt_model):
                         current_keyword = 'NSET'
                     elif line.startswith('*BOUNDARY'):
                         current_keyword = 'BOUNDARY'
+                    elif line.startswith('*STATIC'):
+                        self.solver_line = line
+                        current_keyword = None
+                    elif line.startswith('*DYNAMIC'):
+                        self.solver_line = line
+                        current_keyword = None
                     else:
                         current_keyword = None
                     continue
@@ -1653,7 +1668,11 @@ class ccx_model(dt_model):
                 dv = v - vm
                 dw = w - wm
                 dl2 = du**2 + dv**2 + dw**2
-                obj += 0.5*dl2
+                if self.sensor_scaling:
+                    dl = np.sqrt(um*um+vm*vm+wm*wm)
+                    obj += 0.5*dl2/dl
+                else:
+                    obj += 0.5*dl2
         return obj
 
 
@@ -1692,9 +1711,15 @@ class ccx_model(dt_model):
                 du = u - um
                 dv = v - vm
                 dw = w - wm
-                sensor_load[itime][isensor][0] += du * self.gradient_factor
-                sensor_load[itime][isensor][1] += dv * self.gradient_factor
-                sensor_load[itime][isensor][2] += dw * self.gradient_factor
+                if self.sensor_scaling:
+                    dl = np.sqrt(um*um+vm*mv+wm*wm)
+                    sensor_load[itime][isensor][0] += du * self.gradient_factor / dl
+                    sensor_load[itime][isensor][1] += dv * self.gradient_factor / dl
+                    sensor_load[itime][isensor][2] += dw * self.gradient_factor / dl
+                else:
+                    sensor_load[itime][isensor][0] += du * self.gradient_factor
+                    sensor_load[itime][isensor][1] += dv * self.gradient_factor
+                    sensor_load[itime][isensor][2] += dw * self.gradient_factor
         if self.obj_type == 0:
             sensor_load *= self.integ.weight[isample] * self.pdf(icase, isample, self.integ.gpoint[isample])
         elif self.obj_type == 1:
@@ -2112,7 +2137,9 @@ class ccx_model(dt_model):
                     fu.write('*TIMEPOINTS,NAME=TPRINT,GENERATE\n')
                     fu.write(f"0.0E+00,{self.dt*(self.ntime-1):16.8E},{self.dt:16.8E}\n")
                     fu.write('*STEP\n')
-                    fu.write(f"*DYNAMIC,ALPHA=-0.3,SOLVER=ITERATIVE CHOLESKY,DIRECT\n")
+                    #fu.write(f"*DYNAMIC,ALPHA=-0.3,SOLVER=ITERATIVE CHOLESKY,DIRECT\n")
+                    fu.write(self.solver_line)
+                    fu.write("\n")
                     fu.write(f"1.0E-10,1.0E-10,1.0E-10,1.0E-10\n")
                     fu.write(f"*AMPLITUDE,NAME=A{self.ntime-1}AUX\n")
                     fu.write(f"0.0E+00, 1.0E+00, 1.0E-10, 0.0E+00\n")
@@ -2129,13 +2156,17 @@ class ccx_model(dt_model):
                     for itime in range(self.ntime-1):
                         fu.write('*STEP,INC=10000\n')
                         if itime == 0:
-                            fu.write(f"*DYNAMIC,ALPHA=-0.3,SOLVER=ITERATIVE CHOLESKY\n")
+                            #fu.write(f"*DYNAMIC,ALPHA=-0.3,SOLVER=ITERATIVE CHOLESKY\n")
+                            fu.write(self.solver_line)
+                            fu.write("\n")
                             fu.write(f"{self.dt-1.0E-10},{self.dt-1.0E-10}\n")
                             fu.write(f"*AMPLITUDE,NAME=A{self.ntime-1-itime}\n")
                             #fu.write(f"0.0E+00, 0.0E+00, {0.1*self.dt:16.8E}, 1.0E+00, {0.9*self.dt-1.0E-10:16.8E}, 1.0E+00, {self.dt-1.0E-10:16.8E}, 0.0E+00\n")
                             fu.write(f"0.0E+00, 1.0E+00, {self.dt:16.8E}, 1.0E+00\n")
                         else:
-                            fu.write(f"*DYNAMIC,ALPHA=-0.3,SOLVER=ITERATIVE CHOLESKY\n")
+                            #fu.write(f"*DYNAMIC,ALPHA=-0.3,SOLVER=ITERATIVE CHOLESKY\n")
+                            fu.write(self.solver_line)
+                            fu.write("\n")
                             fu.write(f"{self.dt},{self.dt}\n")
                             fu.write(f"*AMPLITUDE,NAME=A{self.ntime-1-itime}\n")
                             #fu.write(f"0.0E+00, 0.0E+00, {0.1*self.dt:16.8E}, 1.0E+00, {0.9*self.dt:16.8E}, 1.0E+00, {self.dt:16.8E}, 0.0E+00\n")
