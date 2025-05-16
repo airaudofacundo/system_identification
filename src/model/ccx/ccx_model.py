@@ -95,7 +95,7 @@ class ccx_model(dt_model):
     var_min = 1.0e-16
 
     # Initial value for var. For use in CVaR case
-    var = 1.0e-08
+    var = 5.0e-01
 
     # Sparse grid intepolation parameters
     interpolation_nval = 2
@@ -121,12 +121,15 @@ class ccx_model(dt_model):
         nsmoothing      = input_vars.get('nsmoothing', 5)
         do_vtx_morphing = input_vars.get('do_vertex_morphing', False)
         vm_radius       = input_vars.get('vm_radius', 0.0)
+        sensor_scaling  = input_vars.get('sensor_scaling', False)
         run_type        = input_vars.get('run_type', 'static')
         obj_type        = input_vars.get('obj_type', 'basic')
         ngauss          = input_vars.get('ngauss', 3)
         nsample         = input_vars.get('nsample', 1)
         nrandom         = input_vars.get('nrandom', 0)
         cvar_beta       = input_vars.get('cvar_beta', 0.1)
+        cvar_min        = input_vars.get('var_min', self.var_min)
+        cvar_initial    = input_vars.get('var_initial', self.var)
         risk_lambda     = input_vars.get('risk_lambda', 0.5)
         dt              = input_vars.get('dt', 0.0)
         ntime           = input_vars.get('ntime', 1)
@@ -136,6 +139,8 @@ class ccx_model(dt_model):
         self.set_nproc(nproc_ccx, nproc_cases)
         self.set_objective_type(obj_type)
         self.gradient_factor = gradient_factor
+
+        self.sensor_scaling = sensor_scaling
 
         self.run_type = run_type
         self.dt = dt
@@ -149,6 +154,8 @@ class ccx_model(dt_model):
             self.set_integration_order(ngauss, nrandom)
             self.set_cvar_beta(cvar_beta)
             self.set_risk_lambda(risk_lambda)
+            self.var_min = cvar_min
+            self.var_initial = cvar_initial
 
         # Only read mesh from first case.. Hope it's the same for all!
         self.read_inp_file("ccx_input/calculix_forward_case0.inp")
@@ -1655,6 +1662,7 @@ class ccx_model(dt_model):
          for a given case and sample number
     """
     def get_objective(self, icase, isample):
+        EPS = 1.0E-08
         obj = 0.0
         for itime in range(self.ntime):
             for isensor in range(self.nsensor):
@@ -1669,8 +1677,8 @@ class ccx_model(dt_model):
                 dw = w - wm
                 dl2 = du**2 + dv**2 + dw**2
                 if self.sensor_scaling:
-                    dl = np.sqrt(um*um+vm*vm+wm*wm)
-                    obj += 0.5*dl2/dl
+                    dl = um*um+vm*vm+wm*wm
+                    obj += 0.5*dl2 / np.maximum(dl,EPS)
                 else:
                     obj += 0.5*dl2
         return obj
@@ -1699,6 +1707,7 @@ class ccx_model(dt_model):
          and returns it as sensor load for each sensor
     """
     def compute_sensor_load(self, icase, isample):
+        EPS = 1.0E-08
         sensor_load = np.zeros((self.ntime, self.nsensor, 3), dtype = np.float64)
         for itime in range(self.ntime):
             for isensor in range(self.nsensor):
@@ -1712,10 +1721,10 @@ class ccx_model(dt_model):
                 dv = v - vm
                 dw = w - wm
                 if self.sensor_scaling:
-                    dl = np.sqrt(um*um+vm*mv+wm*wm)
-                    sensor_load[itime][isensor][0] += du * self.gradient_factor / dl
-                    sensor_load[itime][isensor][1] += dv * self.gradient_factor / dl
-                    sensor_load[itime][isensor][2] += dw * self.gradient_factor / dl
+                    dl = um*um+vm*vm+wm*wm
+                    sensor_load[itime][isensor][0] += du * self.gradient_factor / np.maximum(dl,EPS)
+                    sensor_load[itime][isensor][1] += dv * self.gradient_factor / np.maximum(dl,EPS)
+                    sensor_load[itime][isensor][2] += dw * self.gradient_factor / np.maximum(dl,EPS)
                 else:
                     sensor_load[itime][isensor][0] += du * self.gradient_factor
                     sensor_load[itime][isensor][1] += dv * self.gradient_factor
@@ -1729,7 +1738,6 @@ class ccx_model(dt_model):
             objval = self.get_objective(icase, isample)
             sensor_load *= self.integ.weight[isample] * self.pdf(icase, isample, self.integ.gpoint[isample]) \
                 * (self.risk_lambda + (1.0-self.risk_lambda) * self.plus_func_dx(objval-self.var) / (1.0-self.cvar_beta))
-
         return sensor_load
 
 
@@ -2017,7 +2025,7 @@ class ccx_model(dt_model):
          with respect to the VaR. For CVaR runs.
     """
     def compute_var_finite_diff(self):
-        delta = 1.0e-09
+        delta = 1.0e-04
 
         var2 = self.var+delta
         if self.var-delta < self.var_min:
@@ -2292,6 +2300,7 @@ class ccx_model(dt_model):
                         obj += self.integ.weight[isample] * self.pdf(icase, isample, self.integ.gpoint[isample]) \
                             * ( self.plus_func(self.get_objective(icase, isample)-self.var) / (1.0-self.cvar_beta) \
                                 + self.var)
+                        #print(f"isample, obj, var = {isample}, {self.get_objective(icase, isample)}, {self.var}")
                         #if self.plus_func(self.get_objective(icase, isample)-self.var) > 0.0:
                         #    ncvar += 1
                     elif self.obj_type == 2:
@@ -2337,8 +2346,9 @@ class ccx_model(dt_model):
         self.add_grad_to_vtk(filename_adj, obj_grad)
 
         if self.obj_type in [1, 2]:
-            self.var -= 1.0e-08*self.compute_var_finite_diff()
-            if self.var < self.var_min: self.var = self.var_min
+            for idiff in range(10):
+                self.var -= 1.0e-01*self.compute_var_finite_diff()
+                if self.var < self.var_min: self.var = self.var_min
 
         return obj_grad
 
